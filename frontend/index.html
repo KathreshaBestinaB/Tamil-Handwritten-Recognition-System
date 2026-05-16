@@ -1,0 +1,415 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Tamil OCR — ResNeXt Transformer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&family=Noto+Sans+Tamil:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#050a14;
+  --surface:#0b1525;
+  --surface2:#111e33;
+  --border:#1e3a5f;
+  --border2:#2a4f80;
+  --cyan:#00e5ff;
+  --cyan-dim:#00aacc;
+  --amber:#ffb700;
+  --green:#00e676;
+  --red:#ff4d6d;
+  --text:#e8f4fd;
+  --text2:#8ab0cc;
+  --text3:#4a6e8a;
+  --font-head:'Syne',sans-serif;
+  --font-mono:'Space Mono',monospace;
+  --font-tamil:'Noto Sans Tamil',sans-serif;
+  --glow:0 0 20px rgba(0,229,255,0.15);
+  --glow-amber:0 0 20px rgba(255,183,0,0.15);
+}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--font-mono);min-height:100vh;overflow-x:hidden}
+
+/* scanline overlay */
+body::before{
+  content:'';position:fixed;inset:0;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.03) 2px,rgba(0,0,0,0.03) 4px);
+  pointer-events:none;z-index:0;
+}
+
+.wrap{position:relative;z-index:1;max-width:1200px;margin:0 auto;padding:0 2rem 4rem}
+
+/* ── HEADER ── */
+header{text-align:center;padding:4rem 0 3rem;border-bottom:1px solid var(--border)}
+.tag{display:inline-block;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:var(--cyan);border:1px solid var(--cyan);padding:4px 16px;border-radius:2px;margin-bottom:1.5rem;opacity:.8}
+h1{font-family:var(--font-head);font-size:clamp(1.8rem,4vw,3rem);font-weight:800;line-height:1.1;background:linear-gradient(135deg,#e8f4fd 30%,var(--cyan) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:.75rem}
+.subtitle{font-size:13px;color:var(--text2);max-width:640px;margin:0 auto 2rem;line-height:1.7}
+.stat-row{display:flex;gap:2rem;justify-content:center;flex-wrap:wrap}
+.stat{text-align:center}
+.stat .val{font-family:var(--font-head);font-size:1.5rem;font-weight:800;color:var(--cyan)}
+.stat .lbl{font-size:10px;letter-spacing:2px;color:var(--text3);text-transform:uppercase;margin-top:2px}
+
+/* ── PIPELINE STEPS ── */
+.pipeline{display:flex;align-items:center;gap:0;margin:2.5rem 0;overflow-x:auto;padding:.5rem 0}
+.step{display:flex;align-items:center;gap:0;flex-shrink:0}
+.step-box{background:var(--surface);border:1px solid var(--border);padding:8px 14px;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);border-radius:3px;white-space:nowrap;transition:all .3s}
+.step-box.active{border-color:var(--cyan);color:var(--cyan);box-shadow:var(--glow)}
+.step-box.done{border-color:var(--green);color:var(--green)}
+.arrow{width:32px;height:1px;background:var(--border);position:relative;flex-shrink:0}
+.arrow::after{content:'▶';position:absolute;right:-6px;top:50%;transform:translateY(-50%);font-size:8px;color:var(--border)}
+
+/* ── UPLOAD ── */
+.upload-zone{border:1px dashed var(--border2);border-radius:6px;padding:3rem 2rem;text-align:center;cursor:pointer;transition:all .3s;margin:2rem 0;background:var(--surface);position:relative;overflow:hidden}
+.upload-zone::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(0,229,255,.03),transparent);pointer-events:none}
+.upload-zone:hover,.upload-zone.drag{border-color:var(--cyan);box-shadow:var(--glow)}
+.upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.upload-icon{font-size:2.5rem;margin-bottom:1rem;opacity:.4}
+.upload-text{font-size:14px;color:var(--text2)}
+.upload-hint{font-size:11px;color:var(--text3);margin-top:.5rem}
+
+.btn{display:inline-flex;align-items:center;gap:8px;background:var(--cyan);color:#000;font-family:var(--font-mono);font-size:13px;font-weight:700;letter-spacing:1px;padding:12px 28px;border:none;border-radius:3px;cursor:pointer;text-transform:uppercase;transition:all .2s;text-decoration:none}
+.btn:hover{background:#00ccee;transform:translateY(-1px)}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn-outline{background:transparent;color:var(--cyan);border:1px solid var(--cyan)}
+.btn-outline:hover{background:rgba(0,229,255,.08)}
+
+/* ── PREVIEW + THRESH ── */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin:1.5rem 0}
+@media(max-width:700px){.two-col{grid-template-columns:1fr}}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.panel-head{padding:10px 16px;border-bottom:1px solid var(--border);font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--text3);display:flex;align-items:center;gap:8px}
+.panel-head .dot{width:8px;height:8px;border-radius:50%;background:var(--cyan)}
+.panel-body{padding:1rem}
+.panel-body img{width:100%;border-radius:4px;display:block}
+
+/* ── CHAR GALLERY ── */
+.char-gallery{display:flex;flex-wrap:wrap;gap:10px;margin:1rem 0}
+.char-card{background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:8px;text-align:center;transition:border-color .2s;min-width:70px}
+.char-card:hover{border-color:var(--border2)}
+.char-card.low{border-color:rgba(255,183,0,.4)}
+.char-card img{width:52px;height:52px;object-fit:contain;border-radius:2px;filter:invert(1) opacity(.9)}
+.char-label{font-family:var(--font-tamil);font-size:1.1rem;color:var(--cyan);margin-top:4px;display:block}
+.char-conf{font-size:10px;color:var(--text3);margin-top:2px}
+.conf-bar-wrap{height:3px;background:var(--border);border-radius:2px;margin-top:4px;overflow:hidden}
+.conf-bar{height:100%;border-radius:2px;background:var(--green);transition:width .6s cubic-bezier(.4,0,.2,1)}
+.conf-bar.low{background:var(--amber)}
+
+/* ── OUTPUT ── */
+.output-box{background:var(--surface);border:1px solid var(--cyan);border-radius:6px;padding:2rem;margin:1.5rem 0;box-shadow:var(--glow);position:relative}
+.output-box::before{content:'OUTPUT';position:absolute;top:-9px;left:16px;font-size:10px;letter-spacing:3px;color:var(--cyan);background:var(--bg);padding:0 8px}
+.output-text{font-family:var(--font-tamil);font-size:2rem;line-height:1.6;color:var(--text);word-break:break-word}
+.output-raw{font-size:.85rem;color:var(--text2);margin-top:1rem;font-family:var(--font-tamil)}
+
+/* ── STATUS ── */
+.status{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text2);margin:1rem 0;padding:10px 16px;background:var(--surface);border-left:3px solid var(--cyan);border-radius:0 4px 4px 0}
+.status.error{border-color:var(--red);color:var(--red)}
+.status.success{border-color:var(--green);color:var(--green)}
+.pulse{width:8px;height:8px;border-radius:50%;background:var(--cyan);animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
+.status.error .pulse{background:var(--red);animation:none}
+.status.success .pulse{background:var(--green);animation:none}
+
+/* ── MODEL INFO ── */
+.model-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin:1.5rem 0}
+.model-card{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:1rem 1.25rem}
+.model-card .mval{font-family:var(--font-head);font-size:1rem;font-weight:700;color:var(--cyan);margin-bottom:2px}
+.model-card .mlbl{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3)}
+
+/* ── SECTION ── */
+section{margin:2.5rem 0}
+.section-title{font-size:11px;letter-spacing:3px;text-transform:uppercase;color:var(--text3);margin-bottom:1rem;display:flex;align-items:center;gap:10px}
+.section-title::after{content:'';flex:1;height:1px;background:var(--border)}
+
+/* ── SPINNER ── */
+.spin{display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--cyan);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* preview thumb */
+.preview-thumb{width:100%;max-height:260px;object-fit:contain;border-radius:4px;display:block;border:1px solid var(--border)}
+.preview-wrap{position:relative;margin:1rem 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="tag">Research Demo · 2025</div>
+  <h1>Tamil Handwritten OCR<br/>ResNeXt + Transformer</h1>
+  <p class="subtitle">Multimodal ResNeXt–Transformer Architecture for Tamil Handwritten Text Recognition and Morpho-Syntactic Error Detection &amp; Correction</p>
+  <div class="stat-row">
+    <div class="stat"><div class="val">97.53%</div><div class="lbl">Validation Accuracy</div></div>
+    <div class="stat"><div class="val">156</div><div class="lbl">Character Classes</div></div>
+    <div class="stat"><div class="val">ResNeXt50</div><div class="lbl">Backbone Model</div></div>
+    <div class="stat"><div class="val">mBERT</div><div class="lbl">Correction Module</div></div>
+  </div>
+</header>
+
+<!-- PIPELINE -->
+<section>
+  <div class="section-title">OCR Pipeline</div>
+  <div class="pipeline" id="pipeline">
+    <div class="step"><div class="step-box" id="s-upload">Upload</div></div>
+    <div class="step"><div class="arrow"></div><div class="step-box" id="s-preprocess">Preprocess</div></div>
+    <div class="step"><div class="arrow"></div><div class="step-box" id="s-segment">Segment</div></div>
+    <div class="step"><div class="arrow"></div><div class="step-box" id="s-predict">Predict</div></div>
+    <div class="step"><div class="arrow"></div><div class="step-box" id="s-correct">Correct</div></div>
+    <div class="step"><div class="arrow"></div><div class="step-box" id="s-output">Output</div></div>
+  </div>
+</section>
+
+<!-- UPLOAD -->
+<section>
+  <div class="section-title">Upload Image</div>
+  <div class="upload-zone" id="dropzone">
+    <input type="file" id="fileInput" accept="image/*"/>
+    <div class="upload-icon">⬆</div>
+    <div class="upload-text">Drop handwritten Tamil image here or click to browse</div>
+    <div class="upload-hint">Supports JPG, PNG, WEBP · Best results with clear black ink on white paper</div>
+  </div>
+  <div class="preview-wrap" id="previewWrap" style="display:none">
+    <img id="previewImg" class="preview-thumb" alt="Preview"/>
+  </div>
+</section>
+
+<div style="text-align:center;margin:1.5rem 0">
+  <button class="btn" id="runBtn" disabled onclick="runOCR()">
+    <span id="btnIcon">▶</span> <span id="btnText">Run OCR</span>
+  </button>
+</div>
+
+<!-- STATUS -->
+<div id="statusBox" style="display:none"></div>
+
+<!-- MODEL INFO -->
+<section>
+  <div class="section-title">Model Architecture</div>
+  <div class="model-row">
+    <div class="model-card"><div class="mval">ResNeXt50_32x4d</div><div class="mlbl">OCR Backbone</div></div>
+    <div class="model-card"><div class="mval">224×224 px</div><div class="mlbl">Input Resolution</div></div>
+    <div class="model-card"><div class="mval">Adaptive Thresh</div><div class="mlbl">Binarisation</div></div>
+    <div class="model-card"><div class="mval">Softmax + Top-1</div><div class="mlbl">Prediction</div></div>
+    <div class="model-card"><div class="mval">Conf &gt; 0.80</div><div class="mlbl">Quality Gate</div></div>
+    <div class="model-card"><div class="mval">mBERT Refine</div><div class="mlbl">Post-Correction</div></div>
+  </div>
+</section>
+
+<!-- RESULTS (hidden until inference) -->
+<div id="results" style="display:none">
+
+  <!-- THRESH + SEGMENTATION VIS -->
+  <section>
+    <div class="section-title">Preprocessing &amp; Segmentation</div>
+    <div class="two-col">
+      <div class="panel">
+        <div class="panel-head"><span class="dot"></span>Thresholded Image</div>
+        <div class="panel-body"><img id="threshImg" alt="Threshold"/></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span class="dot" style="background:var(--red)"></span>Segmentation (Bounding Boxes)</div>
+        <div class="panel-body"><img id="segVisImg" alt="Segmentation"/></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CHAR PREDICTIONS -->
+  <section>
+    <div class="section-title">Character Predictions</div>
+    <div class="char-gallery" id="charGallery"></div>
+  </section>
+
+  <!-- FINAL OUTPUT -->
+  <section>
+    <div class="section-title">Corrected Output (Transformer)</div>
+    <div class="output-box">
+      <div class="output-text" id="correctedText"></div>
+      <div class="output-raw" id="rawText"></div>
+    </div>
+    <div style="margin-top:1rem;display:flex;gap:1rem;flex-wrap:wrap">
+      <button class="btn btn-outline" onclick="downloadResult()">↓ Download TXT</button>
+      <button class="btn btn-outline" onclick="resetAll()" style="border-color:var(--text3);color:var(--text3)">↺ New Image</button>
+    </div>
+  </section>
+
+</div><!-- /results -->
+
+</div><!-- /wrap -->
+
+<script>
+const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? 'http://localhost:8000'
+  : 'http://localhost:8000'; // Update this to your deployed backend URL
+
+let fileObj = null;
+let lastResult = null;
+const steps = ['upload','preprocess','segment','predict','correct','output'];
+
+function setStep(name){
+  steps.forEach(s => {
+    const el = document.getElementById('s-'+s);
+    el.classList.remove('active','done');
+  });
+  const idx = steps.indexOf(name);
+  steps.forEach((s,i) => {
+    const el = document.getElementById('s-'+s);
+    if(i < idx) el.classList.add('done');
+    else if(i === idx) el.classList.add('active');
+  });
+}
+
+function showStatus(msg, type='info'){
+  const b = document.getElementById('statusBox');
+  b.style.display='flex';
+  b.className='status'+(type==='error'?' error':type==='success'?' success':'');
+  b.innerHTML=`<div class="pulse"></div><span>${msg}</span>`;
+}
+
+// Drop zone
+const dz = document.getElementById('dropzone');
+const fi = document.getElementById('fileInput');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag')});
+dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');handleFile(e.dataTransfer.files[0])});
+fi.addEventListener('change',e=>handleFile(e.target.files[0]));
+
+function handleFile(f){
+  if(!f||!f.type.startsWith('image/')) return;
+  fileObj=f;
+  const url=URL.createObjectURL(f);
+  document.getElementById('previewImg').src=url;
+  document.getElementById('previewWrap').style.display='block';
+  document.getElementById('runBtn').disabled=false;
+  document.getElementById('results').style.display='none';
+  document.getElementById('statusBox').style.display='none';
+  setStep('upload');
+  showStatus('Image loaded — ready to run OCR','info');
+}
+
+async function runOCR(){
+  if(!fileObj) return;
+  const btn=document.getElementById('runBtn');
+  btn.disabled=true;
+  document.getElementById('btnIcon').innerHTML='<div class="spin"></div>';
+  document.getElementById('btnText').textContent='Processing...';
+  document.getElementById('results').style.display='none';
+
+  setStep('preprocess');
+  showStatus('Preprocessing: Gaussian blur + Adaptive threshold...');
+  await sleep(400);
+
+  setStep('segment');
+  showStatus('Segmenting characters with contour detection...');
+
+  const fd=new FormData();
+  fd.append('file', fileObj);
+
+  try{
+    const res = await fetch(`${API}/predict`, {method:'POST', body:fd});
+    if(!res.ok){
+      const err=await res.json().catch(()=>({detail:'Server error'}));
+      throw new Error(err.detail||`HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    lastResult = data;
+
+    setStep('predict');
+    showStatus('Running ResNeXt50 inference...');
+    await sleep(300);
+
+    setStep('correct');
+    showStatus('Applying Transformer morpho-syntactic correction...');
+    await sleep(300);
+
+    setStep('output');
+    renderResults(data);
+    showStatus(`Done — ${data.num_chars} characters recognised`, 'success');
+
+  }catch(e){
+    showStatus('Error: '+e.message, 'error');
+    setStep('upload');
+  }finally{
+    btn.disabled=false;
+    document.getElementById('btnIcon').textContent='▶';
+    document.getElementById('btnText').textContent='Run OCR';
+  }
+}
+
+function renderResults(data){
+  // Images
+  document.getElementById('threshImg').src='data:image/png;base64,'+data.thresh_image;
+  document.getElementById('segVisImg').src='data:image/png;base64,'+data.segmentation_vis;
+
+  // Char gallery
+  const gallery=document.getElementById('charGallery');
+  gallery.innerHTML='';
+  (data.predicted_chars||[]).forEach((ch,i)=>{
+    const conf=data.confidences[i];
+    const isLow=conf<0.80;
+    const pct=Math.round(conf*100);
+    const card=document.createElement('div');
+    card.className='char-card'+(isLow?' low':'');
+    const imgEl=document.createElement('img');
+    if(data.segmented_images && data.segmented_images[i]){
+      imgEl.src='data:image/png;base64,'+data.segmented_images[i];
+    }
+    card.innerHTML=``;
+    card.appendChild(imgEl);
+    card.innerHTML+=`
+      <span class="char-label">${ch}</span>
+      <div class="char-conf">${pct}%${isLow?' ⚠':''}</div>
+      <div class="conf-bar-wrap"><div class="conf-bar${isLow?' low':''}" style="width:${pct}%"></div></div>`;
+    gallery.appendChild(card);
+  });
+
+  // Output
+  document.getElementById('correctedText').textContent = data.corrected_text || '—';
+  if(data.raw_text && data.raw_text!==data.corrected_text){
+    document.getElementById('rawText').textContent='Raw OCR: '+data.raw_text;
+  } else {
+    document.getElementById('rawText').textContent='';
+  }
+
+  document.getElementById('results').style.display='block';
+  document.getElementById('results').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+function downloadResult(){
+  if(!lastResult) return;
+  const txt=[
+    'Tamil OCR Result',
+    '================',
+    '',
+    'Corrected Text:',
+    lastResult.corrected_text,
+    '',
+    'Raw OCR:',
+    lastResult.raw_text,
+    '',
+    'Character Predictions:',
+    (lastResult.predicted_chars||[]).map((c,i)=>`${c} (${Math.round((lastResult.confidences[i]||0)*100)}%)`).join(' | '),
+    '',
+    'Model: ResNeXt50 + Transformer Correction',
+    'Accuracy: 97.53%',
+  ].join('\n');
+  const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='tamil_ocr_result.txt';
+  a.click();
+}
+
+function resetAll(){
+  fileObj=null;lastResult=null;
+  document.getElementById('fileInput').value='';
+  document.getElementById('previewWrap').style.display='none';
+  document.getElementById('results').style.display='none';
+  document.getElementById('statusBox').style.display='none';
+  document.getElementById('runBtn').disabled=true;
+  steps.forEach(s=>document.getElementById('s-'+s).classList.remove('active','done'));
+}
+
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+</script>
+</body>
+</html>
